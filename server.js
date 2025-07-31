@@ -1,19 +1,14 @@
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
+const session = require('express-session');
+const MongoStore = require('connect-mongo');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
 const mongoose = require('mongoose');
-const nodemailer = require('nodemailer');
 const multer = require('multer');
 const path = require('path');
+const stripe = require('stripe')('sk_test_your_stripe_secret_key');
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-
-// Store connected users for better socket management
-const connectedUsers = new Map();
 
 // Configure multer for image uploads
 const storage = multer.diskStorage({
@@ -43,8 +38,23 @@ app.use(cookieParser());
 app.use('/styles', express.static('styles'));
 app.use('/uploads', express.static('uploads'));
 
+// Session configuration
+app.use(session({
+  secret: 'your-secret-key',
+  resave: false,
+  saveUninitialized: false,
+  store: MongoStore.create({
+    mongoUrl: 'mongodb://localhost/EcommerceDB',
+    ttl: 24 * 60 * 60 // 1 day
+  }),
+  cookie: {
+    secure: false, // set to true if using https
+    maxAge: 24 * 60 * 60 * 1000 // 1 day
+  }
+}));
+
 // Connect to MongoDB
-mongoose.connect('mongodb://localhost/ChatApp', { useNewUrlParser: true, useUnifiedTopology: true })
+mongoose.connect('mongodb://localhost/EcommerceDB', { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log('Connected to MongoDB'))
   .catch(err => console.error('MongoDB connection error:', err));
 
@@ -53,39 +63,89 @@ const userSchema = new mongoose.Schema({
   username: { type: String, required: true },
   email: { type: String, unique: true, required: true },
   password: { type: String, required: true },
-  otp: String,
-  otpExpiration: Date,
-  status: { type: String, default: 'Hey there! I am using ChatApp' },
-  lastSeen: { type: Date, default: Date.now },
-  online: { type: Boolean, default: false }
+  firstName: String,
+  lastName: String,
+  address: {
+    street: String,
+    city: String,
+    state: String,
+    zipCode: String,
+    country: String
+  },
+  phone: String,
+  isAdmin: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
 });
 const User = mongoose.model('User', userSchema);
 
-// Message Schema (improved with better indexing)
-const messageSchema = new mongoose.Schema({
-  user: { type: String, required: true },
-  recipient: String, // null for group messages
-  text: String,
-  imagePath: String,
-  messageType: { type: String, enum: ['text', 'image'], default: 'text' },
-  timestamp: { type: Date, default: Date.now },
+// Product Schema
+const productSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  description: { type: String, required: true },
+  price: { type: Number, required: true },
+  category: { type: String, required: true },
+  images: [String],
+  stock: { type: Number, default: 0 },
+  rating: { type: Number, default: 0 },
+  numReviews: { type: Number, default: 0 },
+  featured: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
 });
+const Product = mongoose.model('Product', productSchema);
 
-// Add indexes for better query performance
-messageSchema.index({ timestamp: 1 });
-messageSchema.index({ user: 1, recipient: 1 });
-messageSchema.index({ recipient: 1 });
-
-const Message = mongoose.model('Message', messageSchema);
-
-// Nodemailer setup
-const transporter = nodemailer.createTransport({
-  service: 'Gmail',
-  auth: {
-    user: 'tahseensyed685@gmail.com',
-    pass: 'vqxt arht poad jwar',
+// Order Schema
+const orderSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  items: [{
+    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+    quantity: { type: Number, required: true },
+    price: { type: Number, required: true }
+  }],
+  total: { type: Number, required: true },
+  status: { type: String, enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'], default: 'pending' },
+  shippingAddress: {
+    street: String,
+    city: String,
+    state: String,
+    zipCode: String,
+    country: String
   },
+  paymentMethod: String,
+  paymentStatus: { type: String, enum: ['pending', 'completed', 'failed'], default: 'pending' },
+  createdAt: { type: Date, default: Date.now }
 });
+const Order = mongoose.model('Order', orderSchema);
+
+// Cart Schema
+const cartSchema = new mongoose.Schema({
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  sessionId: String,
+  items: [{
+    product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+    quantity: { type: Number, default: 1 }
+  }],
+  createdAt: { type: Date, default: Date.now }
+});
+const Cart = mongoose.model('Cart', cartSchema);
+
+// Middleware to check if user is authenticated
+const isAuthenticated = (req, res, next) => {
+  if (req.session.userId) {
+    return next();
+  }
+  res.redirect('/login');
+};
+
+// Middleware to check if user is admin
+const isAdmin = async (req, res, next) => {
+  if (req.session.userId) {
+    const user = await User.findById(req.session.userId);
+    if (user && user.isAdmin) {
+      return next();
+    }
+  }
+  res.status(403).render('error', { message: 'Access denied. Admin only.' });
+};
 
 // Password validation function
 const validatePassword = (password) => {
@@ -94,376 +154,389 @@ const validatePassword = (password) => {
 };
 
 // Routes
+
+// Home page
+app.get('/', async (req, res) => {
+  try {
+    const featuredProducts = await Product.find({ featured: true }).limit(8);
+    const categories = await Product.distinct('category');
+    res.render('index', { 
+      user: req.session.userId ? await User.findById(req.session.userId) : null,
+      featuredProducts,
+      categories
+    });
+  } catch (error) {
+    res.status(500).render('error', { message: 'Server error' });
+  }
+});
+
+// Login page
 app.get('/login', (req, res) => {
+  if (req.session.userId) {
+    return res.redirect('/');
+  }
   res.render('login', { error: null });
 });
 
-app.get('/', (req, res) => {
-  res.render('login', { error: null });
-});
-
+// Register page
 app.get('/register', (req, res) => {
+  if (req.session.userId) {
+    return res.redirect('/');
+  }
   res.render('register', { error: null });
 });
 
+// Products page
+app.get('/products', async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 12;
+    const category = req.query.category;
+    const search = req.query.search;
+    
+    let query = {};
+    if (category) query.category = category;
+    if (search) query.name = { $regex: search, $options: 'i' };
+    
+    const products = await Product.find(query)
+      .skip((page - 1) * limit)
+      .limit(limit);
+    
+    const total = await Product.countDocuments(query);
+    const pages = Math.ceil(total / limit);
+    
+    res.render('products', {
+      user: req.session.userId ? await User.findById(req.session.userId) : null,
+      products,
+      currentPage: page,
+      pages,
+      category,
+      search
+    });
+  } catch (error) {
+    res.status(500).render('error', { message: 'Server error' });
+  }
+});
+
+// Product detail page
+app.get('/product/:id', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).render('error', { message: 'Product not found' });
+    }
+    
+    const relatedProducts = await Product.find({ 
+      category: product.category,
+      _id: { $ne: product._id }
+    }).limit(4);
+    
+    res.render('product-detail', {
+      user: req.session.userId ? await User.findById(req.session.userId) : null,
+      product,
+      relatedProducts
+    });
+  } catch (error) {
+    res.status(500).render('error', { message: 'Server error' });
+  }
+});
+
+// Cart page
+app.get('/cart', async (req, res) => {
+  try {
+    let cart;
+    if (req.session.userId) {
+      cart = await Cart.findOne({ user: req.session.userId }).populate('items.product');
+    } else if (req.session.cartId) {
+      cart = await Cart.findById(req.session.cartId).populate('items.product');
+    }
+    
+    res.render('cart', {
+      user: req.session.userId ? await User.findById(req.session.userId) : null,
+      cart: cart || { items: [] }
+    });
+  } catch (error) {
+    res.status(500).render('error', { message: 'Server error' });
+  }
+});
+
+// Checkout page
+app.get('/checkout', isAuthenticated, async (req, res) => {
+  try {
+    const cart = await Cart.findOne({ user: req.session.userId }).populate('items.product');
+    if (!cart || cart.items.length === 0) {
+      return res.redirect('/cart');
+    }
+    
+    const user = await User.findById(req.session.userId);
+    res.render('checkout', { user, cart });
+  } catch (error) {
+    res.status(500).render('error', { message: 'Server error' });
+  }
+});
+
+// User profile
+app.get('/profile', isAuthenticated, async (req, res) => {
+  try {
+    const user = await User.findById(req.session.userId);
+    const orders = await Order.find({ user: req.session.userId }).populate('items.product');
+    res.render('profile', { user, orders });
+  } catch (error) {
+    res.status(500).render('error', { message: 'Server error' });
+  }
+});
+
+// Admin dashboard
+app.get('/admin', isAdmin, async (req, res) => {
+  try {
+    const products = await Product.find();
+    const orders = await Order.find().populate('user');
+    const users = await User.find();
+    
+    res.render('admin/dashboard', { products, orders, users });
+  } catch (error) {
+    res.status(500).render('error', { message: 'Server error' });
+  }
+});
+
+// API Routes
+
+// Register user
 app.post('/register', async (req, res) => {
-  const { username, email, password } = req.body;
   try {
+    const { username, email, password, firstName, lastName } = req.body;
+    
     if (!validatePassword(password)) {
-      return res.render('register', {
-        error: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one number, and one special character (!@#$%^&*).',
-      });
+      return res.render('register', { error: 'Password must be at least 8 characters with uppercase, lowercase, number, and special character' });
     }
-
+    
+    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    if (existingUser) {
+      return res.render('register', { error: 'User already exists' });
+    }
+    
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new User({ username, email, password: hashedPassword });
-    await user.save();
-    console.log('User registered:', email);
-    res.redirect('/');
-  } catch (err) {
-    console.error('Registration error:', err.message);
-    if (err.code === 11000) {
-      res.render('register', { error: 'Email already exists. Please use a different email.' });
-    } else {
-      res.render('register', { error: 'Registration failed. Please try again.' });
-    }
-  }
-});
-
-app.post('/login', async (req, res) => {
-  const { email, password } = req.body;
-  try {
-    const user = await User.findOne({ email });
-    if (!user) {
-      if (req.headers['x-requested-with'] === 'XMLHttpRequest') {
-        return res.status(401).json({ error: 'No account found with this email.' });
-      }
-      return res.render('login', { error: 'No account found with this email.' });
-    }
-    if (await bcrypt.compare(password, user.password)) {
-      const token = jwt.sign({ email: user.email, username: user.username }, 'secretkey');
-      res.cookie('token', token, { httpOnly: true });
-      await User.updateOne({ email }, { online: true, lastSeen: Date.now() });
-      if (req.headers['x-requested-with'] === 'XMLHttpRequest') {
-        return res.status(200).json({ redirect: '/chat' });
-      }
-      res.redirect('/chat');
-    } else {
-      if (req.headers['x-requested-with'] === 'XMLHttpRequest') {
-        return res.status(401).json({ error: 'Incorrect password. Please try again.' });
-      }
-      res.render('login', { error: 'Incorrect password. Please try again.' });
-    }
-  } catch (err) {
-    console.error('Login error:', err.message);
-    if (req.headers['x-requested-with'] === 'XMLHttpRequest') {
-      return res.status(500).json({ error: 'Login failed. Please try again.' });
-    }
-    res.render('login', { error: 'Login failed. Please try again.' });
-  }
-});
-
-// Fixed route for group chat - load only group messages (no recipient)
-app.get('/chat', async (req, res) => {
-  const token = req.cookies.token;
-  if (!token) {
-    return res.redirect('/');
-  }
-  try {
-    const decoded = jwt.verify(token, 'secretkey');
-    // Load only group messages (messages without recipient)
-    const messages = await Message.find({ 
-      recipient: { $exists: false } 
-    }).sort({ timestamp: 1 }).limit(100); // Limit to last 100 messages for performance
-    
-    const users = await User.find({}, 'username status online lastSeen');
-    res.render('chat', { username: decoded.username, messages, users, recipient: null });
-  } catch (err) {
-    console.log('Token verification failed:', err.message);
-    res.redirect('/');
-  }
-});
-
-// Fixed route for private chats - load only private messages between two users
-app.get('/chat/:recipient', async (req, res) => {
-  const token = req.cookies.token;
-  const recipient = req.params.recipient;
-  if (!token) {
-    return res.redirect('/');
-  }
-  try {
-    const decoded = jwt.verify(token, 'secretkey');
-    // Load only private messages between current user and recipient
-    const messages = await Message.find({
-      $and: [
-        { recipient: { $exists: true, $ne: null } }, // Only private messages
-        {
-          $or: [
-            { user: decoded.username, recipient: recipient },
-            { user: recipient, recipient: decoded.username }
-          ]
-        }
-      ]
-    }).sort({ timestamp: 1 }).limit(100); // Limit to last 100 messages for performance
-    
-    const users = await User.find({}, 'username status online lastSeen');
-    res.render('chat', { username: decoded.username, messages, users, recipient });
-  } catch (err) {
-    console.log('Token verification failed:', err.message);
-    res.redirect('/');
-  }
-});
-
-// Update user status
-app.post('/update-status', async (req, res) => {
-  const { status } = req.body;
-  const token = req.cookies.token;
-  if (!token) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    const decoded = jwt.verify(token, 'secretkey');
-    await User.updateOne({ email: decoded.email }, { status });
-    io.emit('status update', { username: decoded.username, status });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-});
-
-// Fixed image upload route
-app.post('/upload-image', upload.single('image'), async (req, res) => {
-  const token = req.cookies.token;
-  const { recipient } = req.body;
-  if (!token) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    const decoded = jwt.verify(token, 'secretkey');
-    const imagePath = `/uploads/${req.file.filename}`;
-    const message = new Message({
-      user: decoded.username,
-      recipient: recipient || undefined, // Use undefined instead of null for group chat
-      imagePath,
-      messageType: 'image',
-      timestamp: new Date()
-    });
-    await message.save();
-    
-    // Emit to appropriate recipients
-    if (recipient) {
-      // Private message - send to recipient and sender
-      const recipientSocketId = connectedUsers.get(recipient);
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('chat message', message);
-      }
-      const senderSocketId = connectedUsers.get(decoded.username);
-      if (senderSocketId) {
-        io.to(senderSocketId).emit('chat message', message);
-      }
-    } else {
-      // Group message - broadcast to all
-      io.emit('chat message', message);
-    }
-    
-    res.json({ success: true, imagePath });
-  } catch (err) {
-    console.error('Image upload error:', err.message);
-    res.status(500).json({ error: 'Image upload failed' });
-  }
-});
-
-// Forgot Password Routes
-app.get('/forgot-password', (req, res) => {
-  res.render('forgot-password', { error: null });
-});
-
-app.post('/forgot-password', async (req, res) => {
-  const { email } = req.body;
-  try {
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.render('forgot-password', { error: 'No account found with this email.' });
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    user.otp = otp;
-    user.otpExpiration = Date.now() + 600000;
-    await user.save();
-
-    await transporter.sendMail({
-      to: email,
-      from: 'tahseensyed685@gmail.com',
-      subject: 'Password Reset OTP',
-      html: `<p>Your OTP for password reset is: <strong>${otp}</strong></p><p>This OTP is valid for 10 minutes.</p>`,
-    });
-
-    res.redirect('/reset-password');
-  } catch (err) {
-    console.error('Forgot password error:', err.message);
-    res.render('forgot-password', { error: 'Failed to send OTP. Please try again.' });
-  }
-});
-
-app.get('/reset-password', (req, res) => {
-  res.render('reset-password', { error: null });
-});
-
-app.post('/reset-password', async (req, res) => {
-  const { email, otp, password } = req.body;
-  try {
-    if (!validatePassword(password)) {
-      return res.render('reset-password', {
-        error: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one number, and one special character (!@#$%^&*).',
-      });
-    }
-
-    const user = await User.findOne({
+    const user = new User({
+      username,
       email,
-      otp,
-      otpExpiration: { $gt: Date.now() },
+      password: hashedPassword,
+      firstName,
+      lastName
     });
-    if (!user) {
-      return res.render('reset-password', { error: 'Invalid or expired OTP. Please try again.' });
-    }
-
-    user.password = await bcrypt.hash(password, 10);
-    user.otp = undefined;
-    user.otpExpiration = undefined;
+    
     await user.save();
-
+    req.session.userId = user._id;
     res.redirect('/');
-  } catch (err) {
-    console.error('Reset password error:', err.message);
-    res.render('reset-password', { error: 'Password reset failed. Please try again.' });
+  } catch (error) {
+    res.render('register', { error: 'Registration failed' });
   }
 });
 
-// Add logout route
-app.post('/logout', async (req, res) => {
-  const token = req.cookies.token;
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, 'secretkey');
-      await User.updateOne({ email: decoded.email }, { online: false, lastSeen: Date.now() });
-      connectedUsers.delete(decoded.username);
-    } catch (err) {
-      console.error('Logout error:', err.message);
+// Login user
+app.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    
+    if (!user || !(await bcrypt.compare(password, user.password))) {
+      return res.render('login', { error: 'Invalid credentials' });
     }
+    
+    req.session.userId = user._id;
+    res.redirect('/');
+  } catch (error) {
+    res.render('login', { error: 'Login failed' });
   }
-  res.clearCookie('token');
+});
+
+// Logout
+app.get('/logout', (req, res) => {
+  req.session.destroy();
   res.redirect('/');
 });
 
-// Socket.io middleware for authentication
-io.use((socket, next) => {
-  const token = socket.handshake.query.token;
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, 'secretkey');
-      socket.userId = decoded.username;
-      socket.userEmail = decoded.email;
-      next();
-    } catch (err) {
-      next(new Error('Authentication error'));
-    }
-  } else {
-    next(new Error('Authentication error'));
-  }
-});
-
-// Improved Socket.io for real-time chat
-io.on('connection', async (socket) => {
-  console.log(`User ${socket.userId} connected`);
-  
-  // Store the connection
-  connectedUsers.set(socket.userId, socket.id);
-  
-  // Update user online status
+// Add to cart
+app.post('/cart/add', async (req, res) => {
   try {
-    await User.updateOne({ username: socket.userId }, { online: true, lastSeen: Date.now() });
-    io.emit('status update', { username: socket.userId, online: true });
-  } catch (err) {
-    console.error('Error updating user status:', err.message);
-  }
-
-  // Handle chat messages
-  socket.on('chat message', async (msg) => {
-    try {
-      const message = new Message({
-        user: msg.user,
-        recipient: msg.recipient || undefined, // Use undefined for group chat
-        text: msg.text,
-        messageType: 'text',
-        timestamp: new Date()
-      });
-      await message.save();
-      
-      if (msg.recipient) {
-        // Private message
-        const recipientSocketId = connectedUsers.get(msg.recipient);
-        if (recipientSocketId) {
-          io.to(recipientSocketId).emit('chat message', message);
-        }
-        // Also send to sender
-        io.to(socket.id).emit('chat message', message);
-      } else {
-        // Group message - broadcast to all
-        io.emit('chat message', message);
-      }
-    } catch (err) {
-      console.error('Error saving message to DB:', err.message);
-    }
-  });
-
-  // Handle emoji reactions
-  socket.on('emoji reaction', (data) => {
-    if (data.recipient) {
-      const recipientSocketId = connectedUsers.get(data.recipient);
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('emoji reaction', data);
-      }
-      io.to(socket.id).emit('emoji reaction', data);
-    } else {
-      io.emit('emoji reaction', data);
-    }
-  });
-
-  // Handle typing indicators
-  socket.on('typing', (data) => {
-    if (data.recipient) {
-      const recipientSocketId = connectedUsers.get(data.recipient);
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('typing', data);
-      }
-    } else {
-      socket.broadcast.emit('typing', data);
-    }
-  });
-
-  socket.on('stop typing', (data) => {
-    if (data.recipient) {
-      const recipientSocketId = connectedUsers.get(data.recipient);
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('stop typing', data);
-      }
-    } else {
-      socket.broadcast.emit('stop typing', data);
-    }
-  });
-
-  // Handle disconnect
-  socket.on('disconnect', async () => {
-    console.log(`User ${socket.userId} disconnected`);
-    connectedUsers.delete(socket.userId);
+    const { productId, quantity = 1 } = req.body;
+    let cart;
     
-    try {
-      await User.updateOne({ username: socket.userId }, { online: false, lastSeen: Date.now() });
-      io.emit('status update', { username: socket.userId, online: false });
-    } catch (err) {
-      console.error('Disconnect error:', err.message);
+    if (req.session.userId) {
+      cart = await Cart.findOne({ user: req.session.userId });
+      if (!cart) {
+        cart = new Cart({ user: req.session.userId, items: [] });
+      }
+    } else {
+      if (!req.session.cartId) {
+        cart = new Cart({ sessionId: Date.now().toString(), items: [] });
+        await cart.save();
+        req.session.cartId = cart._id;
+      } else {
+        cart = await Cart.findById(req.session.cartId);
+      }
     }
-  });
+    
+    const existingItem = cart.items.find(item => item.product.toString() === productId);
+    if (existingItem) {
+      existingItem.quantity += parseInt(quantity);
+    } else {
+      cart.items.push({ product: productId, quantity: parseInt(quantity) });
+    }
+    
+    await cart.save();
+    res.json({ success: true, message: 'Added to cart' });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to add to cart' });
+  }
 });
 
-server.listen(3000, () => console.log('Server running on port 3000'));
+// Update cart
+app.put('/cart/update', async (req, res) => {
+  try {
+    const { productId, quantity } = req.body;
+    let cart;
+    
+    if (req.session.userId) {
+      cart = await Cart.findOne({ user: req.session.userId });
+    } else if (req.session.cartId) {
+      cart = await Cart.findById(req.session.cartId);
+    }
+    
+    if (!cart) {
+      return res.status(404).json({ success: false, message: 'Cart not found' });
+    }
+    
+    const item = cart.items.find(item => item.product.toString() === productId);
+    if (item) {
+      if (quantity <= 0) {
+        cart.items = cart.items.filter(item => item.product.toString() !== productId);
+      } else {
+        item.quantity = quantity;
+      }
+      await cart.save();
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to update cart' });
+  }
+});
+
+// Create order
+app.post('/order/create', isAuthenticated, async (req, res) => {
+  try {
+    const { shippingAddress, paymentMethod } = req.body;
+    const cart = await Cart.findOne({ user: req.session.userId }).populate('items.product');
+    
+    if (!cart || cart.items.length === 0) {
+      return res.status(400).json({ success: false, message: 'Cart is empty' });
+    }
+    
+    const items = cart.items.map(item => ({
+      product: item.product._id,
+      quantity: item.quantity,
+      price: item.product.price
+    }));
+    
+    const total = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    
+    const order = new Order({
+      user: req.session.userId,
+      items,
+      total,
+      shippingAddress,
+      paymentMethod
+    });
+    
+    await order.save();
+    
+    // Clear cart
+    await Cart.findByIdAndDelete(cart._id);
+    
+    res.json({ success: true, orderId: order._id });
+  } catch (error) {
+    res.status(500).json({ success: false, message: 'Failed to create order' });
+  }
+});
+
+// Admin routes
+app.post('/admin/product', isAdmin, upload.array('images', 5), async (req, res) => {
+  try {
+    const { name, description, price, category, stock, featured } = req.body;
+    const images = req.files ? req.files.map(file => file.filename) : [];
+    
+    const product = new Product({
+      name,
+      description,
+      price: parseFloat(price),
+      category,
+      stock: parseInt(stock),
+      featured: featured === 'on',
+      images
+    });
+    
+    await product.save();
+    res.redirect('/admin');
+  } catch (error) {
+    res.status(500).render('error', { message: 'Failed to create product' });
+  }
+});
+
+// Initialize sample data
+const initializeData = async () => {
+  try {
+    const productCount = await Product.countDocuments();
+    if (productCount === 0) {
+      const sampleProducts = [
+        {
+          name: 'Wireless Bluetooth Headphones',
+          description: 'High-quality wireless headphones with noise cancellation',
+          price: 99.99,
+          category: 'Electronics',
+          stock: 50,
+          featured: true,
+          images: ['headphones.jpg']
+        },
+        {
+          name: 'Smart Fitness Watch',
+          description: 'Track your fitness goals with this advanced smartwatch',
+          price: 199.99,
+          category: 'Electronics',
+          stock: 30,
+          featured: true,
+          images: ['smartwatch.jpg']
+        },
+        {
+          name: 'Organic Cotton T-Shirt',
+          description: 'Comfortable and eco-friendly cotton t-shirt',
+          price: 29.99,
+          category: 'Clothing',
+          stock: 100,
+          featured: false,
+          images: ['tshirt.jpg']
+        },
+        {
+          name: 'Running Shoes',
+          description: 'Professional running shoes for maximum comfort',
+          price: 89.99,
+          category: 'Footwear',
+          stock: 75,
+          featured: true,
+          images: ['shoes.jpg']
+        }
+      ];
+      
+      await Product.insertMany(sampleProducts);
+      console.log('Sample products initialized');
+    }
+  } catch (error) {
+    console.error('Error initializing data:', error);
+  }
+};
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  initializeData();
+});
