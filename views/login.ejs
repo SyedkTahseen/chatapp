@@ -1,143 +1,388 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Login</title>
-  <link rel="stylesheet" href="/styles/login.css">
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-  <style>
-    /* ONLY ADDED THESE STYLES FOR PASSWORD TOGGLE */
-    .form-group.position-relative {
-      position: relative;
-    }
-    .password-toggle {
-      position: absolute;
-      right: 12px;
-      top: 67px; /* Adjusted to align with input field */
-      cursor: pointer;
-      color: #6c757d;
-    }
-    .password-input {
-      padding-right: 35px; /* Make space for the icon */
-    }
-    #error-alert {
-      display: none;
-      position: fixed;
-      top: 20px;
-      left: 50%;
-      transform: translateX(-50%);
-      z-index: 1000;
-      padding: 15px 20px;
-      background-color: #f8d7da;
-      color: #721c24;
-      border: 1px solid #f5c6cb;
-      border-radius: 4px;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-      animation: fadeIn 0.3s, fadeOut 0.3s 2.7s;
-    }
-    @keyframes fadeIn {
-      from { opacity: 0; top: 0; }
-      to { opacity: 1; top: 20px; }
-    }
-    @keyframes fadeOut {
-      from { opacity: 1; top: 20px; }
-      to { opacity: 0; top: 0; }
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - ShopEasy</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="/styles/main.css" rel="stylesheet">
 </head>
 <body>
-  <div id="error-alert"></div>
-  <div class="container">
-    <div class="login-wrapper">
-      <div class="login-slide">
-        <button type="button" id="login-trigger" onclick="document.querySelector('.login-wrapper').classList.add('active')">Login</button>
-      </div>
-      <div class="card login-form">
-        <h1>Login</h1>
-        <form id="login-form">
-          <div class="form-group">
-            <label for="email" class="form-label">Email</label>
-            <input type="email" class="form-control" id="email" name="email" placeholder="Enter your email address" required>
-          </div>
-          <div class="form-group position-relative">
-            <label for="password" class="form-label">Password</label>
-            <input type="password" class="form-control password-input" id="password" name="password" placeholder="Enter your password" required>
-            <span class="password-toggle" onclick="togglePassword('password')">
-              <i class="fas fa-eye"></i>
-            </span>
-          </div>
-          <button type="submit" class="btn btn-primary">Login</button>
-        </form>
-        <div class="links">
-          <div class="register-link">
-            <a href="/register">Don't have an account? Register | </a>
-          </div>
-          <div class="forgot-password-link">
-            <a href="/forgot-password">Forgot Password?</a>
-          </div>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <a href="/"><i class="fas fa-shopping-bag"></i> ShopEasy</a>
+            </div>
+            
+            <div class="nav-search">
+                <form action="/products" method="GET" class="search-form">
+                    <input type="text" name="search" placeholder="Search products..." class="search-input">
+                    <button type="submit" class="search-btn"><i class="fas fa-search"></i></button>
+                </form>
+            </div>
+            
+            <div class="nav-links">
+                <a href="/products" class="nav-link">Products</a>
+                <a href="/login" class="nav-link active">Login</a>
+                <a href="/register" class="nav-link">Register</a>
+            </div>
         </div>
-      </div>
-    </div>
-  </div>
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-  <script>
-    function togglePassword(inputId) {
-      const input = document.getElementById(inputId);
-      const icon = input.nextElementSibling.querySelector('i');
-      if (input.type === 'password') {
-        input.type = 'text';
-        icon.classList.remove('fa-eye');
-        icon.classList.add('fa-eye-slash');
-      } else {
-        input.type = 'password';
-        icon.classList.remove('fa-eye-slash');
-        icon.classList.add('fa-eye');
-      }
-    }
+    </nav>
 
-    // Handle form submission with AJAX
-    document.getElementById('login-form').addEventListener('submit', async function(e) {
-      e.preventDefault();
-      
-      const formData = {
-        email: document.getElementById('email').value,
-        password: document.getElementById('password').value
-      };
-      
-      try {
-        const response = await fetch('/login', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
-          },
-          body: JSON.stringify(formData)
-        });
-        
-        const data = await response.json();
-        
-        if (response.ok) {
-          window.location.href = data.redirect;
-        } else {
-          showError(data.error);
+    <div class="container">
+        <div class="form-container">
+            <div class="form-header">
+                <h2><i class="fas fa-sign-in-alt"></i> Welcome Back</h2>
+                <p>Sign in to your ShopEasy account</p>
+            </div>
+
+            <% if (error) { %>
+                <div class="error-message">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <%= error %>
+                </div>
+            <% } %>
+
+            <form action="/login" method="POST" class="login-form">
+                <div class="form-group">
+                    <label for="email">Email Address</label>
+                    <input type="email" id="email" name="email" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <div class="password-input">
+                        <input type="password" id="password" name="password" required>
+                        <button type="button" class="password-toggle" onclick="togglePassword()">
+                            <i class="fas fa-eye-slash"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" name="remember">
+                        <span class="checkmark"></span>
+                        Remember me
+                    </label>
+                    <a href="/forgot-password" class="forgot-link">Forgot password?</a>
+                </div>
+
+                <button type="submit" class="btn btn-primary">
+                    <i class="fas fa-sign-in-alt"></i> Sign In
+                </button>
+            </form>
+
+            <div class="divider">
+                <span>or</span>
+            </div>
+
+            <div class="social-login">
+                <button class="btn btn-social google">
+                    <i class="fab fa-google"></i> Continue with Google
+                </button>
+                <button class="btn btn-social facebook">
+                    <i class="fab fa-facebook-f"></i> Continue with Facebook
+                </button>
+            </div>
+
+            <div class="form-footer">
+                <p>Don't have an account? <a href="/register">Create one here</a></p>
+            </div>
+
+            <div class="demo-accounts">
+                <h4>Demo Accounts for Testing:</h4>
+                <div class="demo-account">
+                    <strong>Admin Account:</strong><br>
+                    Email: admin@shopeasy.com<br>
+                    Password: Admin123!
+                </div>
+                <div class="demo-account">
+                    <strong>User Account:</strong><br>
+                    Email: john@example.com<br>
+                    Password: Password123!
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>ShopEasy</h3>
+                    <p>Your trusted e-commerce partner for quality products and exceptional service.</p>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 ShopEasy. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <script>
+        function togglePassword() {
+            const passwordInput = document.getElementById('password');
+            const toggleIcon = document.querySelector('.password-toggle i');
+            
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                toggleIcon.classList.replace('fa-eye-slash', 'fa-eye');
+            } else {
+                passwordInput.type = 'password';
+                toggleIcon.classList.replace('fa-eye', 'fa-eye-slash');
+            }
         }
-      } catch (error) {
-        showError('Login failed. Please try again.');
-      }
-    });
-    
-    function showError(message) {
-      const errorAlert = document.getElementById('error-alert');
-      errorAlert.textContent = message;
-      errorAlert.style.display = 'block';
-      
-      // Hide after 3 seconds
-      setTimeout(() => {
-        errorAlert.style.display = 'none';
-      }, 3000);
-    }
-  </script>
+
+        // Quick fill demo accounts
+        function fillDemoAccount(type) {
+            const emailInput = document.getElementById('email');
+            const passwordInput = document.getElementById('password');
+            
+            if (type === 'admin') {
+                emailInput.value = 'admin@shopeasy.com';
+                passwordInput.value = 'Admin123!';
+            } else {
+                emailInput.value = 'john@example.com';
+                passwordInput.value = 'Password123!';
+            }
+        }
+
+        // Add click handlers to demo accounts
+        document.querySelectorAll('.demo-account').forEach((account, index) => {
+            account.style.cursor = 'pointer';
+            account.addEventListener('click', () => {
+                fillDemoAccount(index === 0 ? 'admin' : 'user');
+            });
+        });
+    </script>
+
+    <style>
+        .form-container {
+            max-width: 450px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        }
+
+        .form-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+
+        .form-header h2 {
+            color: #333;
+            margin-bottom: 0.5rem;
+            font-size: 1.8rem;
+        }
+
+        .form-header p {
+            color: #6c757d;
+            margin: 0;
+        }
+
+        .login-form {
+            margin-bottom: 1.5rem;
+        }
+
+        .password-input {
+            position: relative;
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            color: #6c757d;
+            cursor: pointer;
+            padding: 0;
+            font-size: 1rem;
+        }
+
+        .password-toggle:hover {
+            color: #007bff;
+        }
+
+        .form-options {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin: 1.5rem 0;
+        }
+
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .checkbox-label input[type="checkbox"] {
+            width: auto;
+            margin: 0;
+        }
+
+        .forgot-link {
+            color: #007bff;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+
+        .forgot-link:hover {
+            text-decoration: underline;
+        }
+
+        .btn-primary {
+            background: #007bff;
+            width: 100%;
+            font-size: 1.1rem;
+            padding: 0.875rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .btn-primary:hover {
+            background: #0056b3;
+        }
+
+        .divider {
+            text-align: center;
+            margin: 1.5rem 0;
+            position: relative;
+        }
+
+        .divider::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: #e9ecef;
+        }
+
+        .divider span {
+            background: white;
+            padding: 0 1rem;
+            color: #6c757d;
+            font-size: 0.9rem;
+        }
+
+        .social-login {
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .btn-social {
+            background: #f8f9fa;
+            color: #333;
+            border: 2px solid #e9ecef;
+            padding: 0.75rem;
+            font-weight: 500;
+        }
+
+        .btn-social:hover {
+            background: #e9ecef;
+            transform: translateY(0);
+        }
+
+        .btn-social.google:hover {
+            background: #db4437;
+            color: white;
+            border-color: #db4437;
+        }
+
+        .btn-social.facebook:hover {
+            background: #3b5998;
+            color: white;
+            border-color: #3b5998;
+        }
+
+        .form-footer {
+            text-align: center;
+            padding-top: 1rem;
+            border-top: 1px solid #e9ecef;
+            margin-bottom: 1.5rem;
+        }
+
+        .form-footer a {
+            color: #007bff;
+            text-decoration: none;
+            font-weight: 600;
+        }
+
+        .form-footer a:hover {
+            text-decoration: underline;
+        }
+
+        .demo-accounts {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
+        .demo-accounts h4 {
+            color: #333;
+            margin-bottom: 0.75rem;
+            font-size: 0.9rem;
+            text-align: center;
+        }
+
+        .demo-account {
+            background: white;
+            border: 1px solid #e9ecef;
+            border-radius: 5px;
+            padding: 0.75rem;
+            margin-bottom: 0.5rem;
+            font-size: 0.8rem;
+            transition: all 0.3s;
+        }
+
+        .demo-account:last-child {
+            margin-bottom: 0;
+        }
+
+        .demo-account:hover {
+            border-color: #007bff;
+            background: #f0f8ff;
+            transform: translateY(-1px);
+        }
+
+        .demo-account strong {
+            color: #007bff;
+        }
+
+        .nav-link.active {
+            color: #007bff;
+            font-weight: 600;
+        }
+
+        @media (max-width: 768px) {
+            .form-container {
+                margin: 1rem;
+                padding: 1.5rem;
+            }
+
+            .form-header h2 {
+                font-size: 1.5rem;
+            }
+
+            .form-options {
+                flex-direction: column;
+                gap: 1rem;
+                align-items: flex-start;
+            }
+        }
+    </style>
 </body>
 </html>
