@@ -1,6 +1,5 @@
 const express = require('express');
 const http = require('http');
-const { Server } = require('socket.io');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const cookieParser = require('cookie-parser');
@@ -8,84 +7,205 @@ const mongoose = require('mongoose');
 const nodemailer = require('nodemailer');
 const multer = require('multer');
 const path = require('path');
+const { v4: uuidv4 } = require('uuid');
+
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server);
 
-// Store connected users for better socket management
-const connectedUsers = new Map();
-
-// Configure multer for image uploads
+// Configure multer for product image uploads
 const storage = multer.diskStorage({
   destination: './uploads/',
   filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));
+    cb(null, Date.now() + '-' + Math.round(Math.random() * 1E9) + path.extname(file.originalname));
   }
 });
+
 const upload = multer({
   storage,
-  limits: { fileSize: 5000000 }, // 5MB limit
+  limits: { fileSize: 10000000 }, // 10MB limit
   fileFilter: (req, file, cb) => {
-    const filetypes = /jpeg|jpg|png|gif/;
+    const filetypes = /jpeg|jpg|png|gif|webp/;
     const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = filetypes.test(file.mimetype);
     if (extname && mimetype) {
       return cb(null, true);
     }
-    cb('Error: Images only (jpeg, jpg, png, gif)!');
+    cb('Error: Images only (jpeg, jpg, png, gif, webp)!');
   }
 });
 
+// Middleware
 app.set('view engine', 'ejs');
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(cookieParser());
 app.use('/styles', express.static('styles'));
 app.use('/uploads', express.static('uploads'));
+app.use('/js', express.static('js'));
 
 // Connect to MongoDB
-mongoose.connect('mongodb://localhost/ChatApp', { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(() => console.log('Connected to MongoDB'))
-  .catch(err => console.error('MongoDB connection error:', err));
+mongoose.connect('mongodb://localhost/ECommerceApp', { 
+  useNewUrlParser: true, 
+  useUnifiedTopology: true 
+})
+.then(() => console.log('Connected to MongoDB'))
+.catch(err => console.error('MongoDB connection error:', err));
 
 // User Schema
 const userSchema = new mongoose.Schema({
   username: { type: String, required: true },
   email: { type: String, unique: true, required: true },
   password: { type: String, required: true },
+  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  firstName: String,
+  lastName: String,
+  address: {
+    street: String,
+    city: String,
+    state: String,
+    zipCode: String,
+    country: String
+  },
+  phone: String,
   otp: String,
   otpExpiration: Date,
-  status: { type: String, default: 'Hey there! I am using ChatApp' },
-  lastSeen: { type: Date, default: Date.now },
-  online: { type: Boolean, default: false }
+  createdAt: { type: Date, default: Date.now }
 });
+
 const User = mongoose.model('User', userSchema);
 
-// Message Schema (improved with better indexing)
-const messageSchema = new mongoose.Schema({
-  user: { type: String, required: true },
-  recipient: String, // null for group messages
-  text: String,
-  imagePath: String,
-  messageType: { type: String, enum: ['text', 'image'], default: 'text' },
-  timestamp: { type: Date, default: Date.now },
+// Product Schema
+const productSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  description: { type: String, required: true },
+  price: { type: Number, required: true },
+  category: { type: String, required: true },
+  subcategory: String,
+  brand: String,
+  images: [String],
+  stock: { type: Number, default: 0 },
+  rating: { type: Number, default: 0 },
+  numReviews: { type: Number, default: 0 },
+  featured: { type: Boolean, default: false },
+  tags: [String],
+  specifications: [{
+    key: String,
+    value: String
+  }],
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
 });
 
-// Add indexes for better query performance
-messageSchema.index({ timestamp: 1 });
-messageSchema.index({ user: 1, recipient: 1 });
-messageSchema.index({ recipient: 1 });
+productSchema.index({ name: 'text', description: 'text', category: 'text', brand: 'text' });
+const Product = mongoose.model('Product', productSchema);
 
-const Message = mongoose.model('Message', messageSchema);
+// Review Schema
+const reviewSchema = new mongoose.Schema({
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  username: { type: String, required: true },
+  rating: { type: Number, required: true, min: 1, max: 5 },
+  comment: String,
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Review = mongoose.model('Review', reviewSchema);
+
+// Cart Schema
+const cartSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  items: [{
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+    quantity: { type: Number, required: true, min: 1 },
+    price: { type: Number, required: true }
+  }],
+  totalAmount: { type: Number, default: 0 },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+const Cart = mongoose.model('Cart', cartSchema);
+
+// Order Schema
+const orderSchema = new mongoose.Schema({
+  orderId: { type: String, unique: true, required: true },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  items: [{
+    productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+    name: String,
+    price: Number,
+    quantity: Number,
+    image: String
+  }],
+  totalAmount: { type: Number, required: true },
+  status: { 
+    type: String, 
+    enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'], 
+    default: 'pending' 
+  },
+  shippingAddress: {
+    firstName: String,
+    lastName: String,
+    street: String,
+    city: String,
+    state: String,
+    zipCode: String,
+    country: String,
+    phone: String
+  },
+  paymentMethod: { type: String, default: 'card' },
+  paymentStatus: { 
+    type: String, 
+    enum: ['pending', 'paid', 'failed', 'refunded'], 
+    default: 'pending' 
+  },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Order = mongoose.model('Order', orderSchema);
 
 // Nodemailer setup
 const transporter = nodemailer.createTransport({
   service: 'Gmail',
   auth: {
-    user: 'tahseensyed685@gmail.com',
-    pass: 'vqxt arht poad jwar',
+    user: 'your-email@gmail.com', // Update with your email
+    pass: 'your-app-password', // Update with your app password
   },
 });
+
+// Middleware for authentication
+const authenticateToken = (req, res, next) => {
+  const token = req.cookies.token;
+  if (!token) {
+    return res.redirect('/login');
+  }
+  try {
+    const decoded = jwt.verify(token, 'secretkey');
+    req.user = decoded;
+    next();
+  } catch (err) {
+    res.redirect('/login');
+  }
+};
+
+// Middleware for admin authentication
+const authenticateAdmin = async (req, res, next) => {
+  const token = req.cookies.token;
+  if (!token) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  try {
+    const decoded = jwt.verify(token, 'secretkey');
+    const user = await User.findOne({ email: decoded.email });
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+    req.user = decoded;
+    req.userDoc = user;
+    next();
+  } catch (err) {
+    res.status(401).json({ error: 'Invalid token' });
+  }
+};
 
 // Password validation function
 const validatePassword = (password) => {
@@ -94,11 +214,18 @@ const validatePassword = (password) => {
 };
 
 // Routes
-app.get('/login', (req, res) => {
-  res.render('login', { error: null });
+app.get('/', async (req, res) => {
+  try {
+    const featuredProducts = await Product.find({ featured: true }).limit(8);
+    const categories = await Product.distinct('category');
+    res.render('index', { featuredProducts, categories, user: req.user || null });
+  } catch (err) {
+    console.error('Error loading homepage:', err);
+    res.render('index', { featuredProducts: [], categories: [], user: null });
+  }
 });
 
-app.get('/', (req, res) => {
+app.get('/login', (req, res) => {
   res.render('login', { error: null });
 });
 
@@ -107,7 +234,7 @@ app.get('/register', (req, res) => {
 });
 
 app.post('/register', async (req, res) => {
-  const { username, email, password } = req.body;
+  const { username, email, password, firstName, lastName } = req.body;
   try {
     if (!validatePassword(password)) {
       return res.render('register', {
@@ -116,10 +243,16 @@ app.post('/register', async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = new User({ username, email, password: hashedPassword });
+    const user = new User({ 
+      username, 
+      email, 
+      password: hashedPassword,
+      firstName,
+      lastName
+    });
     await user.save();
     console.log('User registered:', email);
-    res.redirect('/');
+    res.redirect('/login');
   } catch (err) {
     console.error('Registration error:', err.message);
     if (err.code === 11000) {
@@ -135,335 +268,428 @@ app.post('/login', async (req, res) => {
   try {
     const user = await User.findOne({ email });
     if (!user) {
-      if (req.headers['x-requested-with'] === 'XMLHttpRequest') {
-        return res.status(401).json({ error: 'No account found with this email.' });
-      }
       return res.render('login', { error: 'No account found with this email.' });
     }
     if (await bcrypt.compare(password, user.password)) {
-      const token = jwt.sign({ email: user.email, username: user.username }, 'secretkey');
+      const token = jwt.sign({ 
+        email: user.email, 
+        username: user.username,
+        userId: user._id,
+        role: user.role 
+      }, 'secretkey');
       res.cookie('token', token, { httpOnly: true });
-      await User.updateOne({ email }, { online: true, lastSeen: Date.now() });
-      if (req.headers['x-requested-with'] === 'XMLHttpRequest') {
-        return res.status(200).json({ redirect: '/chat' });
-      }
-      res.redirect('/chat');
+      res.redirect('/');
     } else {
-      if (req.headers['x-requested-with'] === 'XMLHttpRequest') {
-        return res.status(401).json({ error: 'Incorrect password. Please try again.' });
-      }
       res.render('login', { error: 'Incorrect password. Please try again.' });
     }
   } catch (err) {
     console.error('Login error:', err.message);
-    if (req.headers['x-requested-with'] === 'XMLHttpRequest') {
-      return res.status(500).json({ error: 'Login failed. Please try again.' });
-    }
     res.render('login', { error: 'Login failed. Please try again.' });
   }
 });
 
-// Fixed route for group chat - load only group messages (no recipient)
-app.get('/chat', async (req, res) => {
-  const token = req.cookies.token;
-  if (!token) {
-    return res.redirect('/');
-  }
+// Product routes
+app.get('/products', async (req, res) => {
   try {
-    const decoded = jwt.verify(token, 'secretkey');
-    // Load only group messages (messages without recipient)
-    const messages = await Message.find({ 
-      recipient: { $exists: false } 
-    }).sort({ timestamp: 1 }).limit(100); // Limit to last 100 messages for performance
-    
-    const users = await User.find({}, 'username status online lastSeen');
-    res.render('chat', { username: decoded.username, messages, users, recipient: null });
-  } catch (err) {
-    console.log('Token verification failed:', err.message);
-    res.redirect('/');
-  }
-});
+    const page = parseInt(req.query.page) || 1;
+    const limit = 12;
+    const skip = (page - 1) * limit;
+    const category = req.query.category;
+    const search = req.query.search;
+    const sort = req.query.sort || 'createdAt';
+    const order = req.query.order === 'desc' ? -1 : 1;
 
-// Fixed route for private chats - load only private messages between two users
-app.get('/chat/:recipient', async (req, res) => {
-  const token = req.cookies.token;
-  const recipient = req.params.recipient;
-  if (!token) {
-    return res.redirect('/');
-  }
-  try {
-    const decoded = jwt.verify(token, 'secretkey');
-    // Load only private messages between current user and recipient
-    const messages = await Message.find({
-      $and: [
-        { recipient: { $exists: true, $ne: null } }, // Only private messages
-        {
-          $or: [
-            { user: decoded.username, recipient: recipient },
-            { user: recipient, recipient: decoded.username }
-          ]
-        }
-      ]
-    }).sort({ timestamp: 1 }).limit(100); // Limit to last 100 messages for performance
-    
-    const users = await User.find({}, 'username status online lastSeen');
-    res.render('chat', { username: decoded.username, messages, users, recipient });
-  } catch (err) {
-    console.log('Token verification failed:', err.message);
-    res.redirect('/');
-  }
-});
+    let query = {};
+    if (category) query.category = category;
+    if (search) {
+      query.$text = { $search: search };
+    }
 
-// Update user status
-app.post('/update-status', async (req, res) => {
-  const { status } = req.body;
-  const token = req.cookies.token;
-  if (!token) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    const decoded = jwt.verify(token, 'secretkey');
-    await User.updateOne({ email: decoded.email }, { status });
-    io.emit('status update', { username: decoded.username, status });
-    res.json({ success: true });
-  } catch (err) {
-    res.status(401).json({ error: 'Invalid token' });
-  }
-});
+    const totalProducts = await Product.countDocuments(query);
+    const totalPages = Math.ceil(totalProducts / limit);
 
-// Fixed image upload route
-app.post('/upload-image', upload.single('image'), async (req, res) => {
-  const token = req.cookies.token;
-  const { recipient } = req.body;
-  if (!token) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  try {
-    const decoded = jwt.verify(token, 'secretkey');
-    const imagePath = `/uploads/${req.file.filename}`;
-    const message = new Message({
-      user: decoded.username,
-      recipient: recipient || undefined, // Use undefined instead of null for group chat
-      imagePath,
-      messageType: 'image',
-      timestamp: new Date()
+    const products = await Product.find(query)
+      .sort({ [sort]: order })
+      .skip(skip)
+      .limit(limit);
+
+    const categories = await Product.distinct('category');
+
+    res.render('products', {
+      products,
+      categories,
+      currentPage: page,
+      totalPages,
+      category: category || '',
+      search: search || '',
+      sort,
+      order: req.query.order || 'asc',
+      user: req.user || null
     });
-    await message.save();
+  } catch (err) {
+    console.error('Error loading products:', err);
+    res.render('products', { 
+      products: [], 
+      categories: [], 
+      currentPage: 1, 
+      totalPages: 1,
+      category: '',
+      search: '',
+      sort: 'createdAt',
+      order: 'asc',
+      user: null
+    });
+  }
+});
+
+app.get('/product/:id', async (req, res) => {
+  try {
+    const product = await Product.findById(req.params.id);
+    if (!product) {
+      return res.status(404).render('404');
+    }
     
-    // Emit to appropriate recipients
-    if (recipient) {
-      // Private message - send to recipient and sender
-      const recipientSocketId = connectedUsers.get(recipient);
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('chat message', message);
-      }
-      const senderSocketId = connectedUsers.get(decoded.username);
-      if (senderSocketId) {
-        io.to(senderSocketId).emit('chat message', message);
-      }
+    const reviews = await Review.find({ productId: req.params.id })
+      .sort({ createdAt: -1 })
+      .limit(10);
+    
+    const relatedProducts = await Product.find({ 
+      category: product.category, 
+      _id: { $ne: product._id } 
+    }).limit(4);
+
+    res.render('product-detail', { 
+      product, 
+      reviews, 
+      relatedProducts,
+      user: req.user || null 
+    });
+  } catch (err) {
+    console.error('Error loading product:', err);
+    res.status(404).render('404');
+  }
+});
+
+// Cart routes
+app.get('/cart', authenticateToken, async (req, res) => {
+  try {
+    const cart = await Cart.findOne({ userId: req.user.userId })
+      .populate('items.productId');
+    res.render('cart', { cart: cart || { items: [] }, user: req.user });
+  } catch (err) {
+    console.error('Error loading cart:', err);
+    res.render('cart', { cart: { items: [] }, user: req.user });
+  }
+});
+
+app.post('/cart/add', authenticateToken, async (req, res) => {
+  try {
+    const { productId, quantity = 1 } = req.body;
+    const product = await Product.findById(productId);
+    
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    if (product.stock < quantity) {
+      return res.status(400).json({ error: 'Insufficient stock' });
+    }
+
+    let cart = await Cart.findOne({ userId: req.user.userId });
+    
+    if (!cart) {
+      cart = new Cart({ userId: req.user.userId, items: [] });
+    }
+
+    const existingItem = cart.items.find(item => 
+      item.productId.toString() === productId
+    );
+
+    if (existingItem) {
+      existingItem.quantity += parseInt(quantity);
     } else {
-      // Group message - broadcast to all
-      io.emit('chat message', message);
-    }
-    
-    res.json({ success: true, imagePath });
-  } catch (err) {
-    console.error('Image upload error:', err.message);
-    res.status(500).json({ error: 'Image upload failed' });
-  }
-});
-
-// Forgot Password Routes
-app.get('/forgot-password', (req, res) => {
-  res.render('forgot-password', { error: null });
-});
-
-app.post('/forgot-password', async (req, res) => {
-  const { email } = req.body;
-  try {
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.render('forgot-password', { error: 'No account found with this email.' });
-    }
-
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    user.otp = otp;
-    user.otpExpiration = Date.now() + 600000;
-    await user.save();
-
-    await transporter.sendMail({
-      to: email,
-      from: 'tahseensyed685@gmail.com',
-      subject: 'Password Reset OTP',
-      html: `<p>Your OTP for password reset is: <strong>${otp}</strong></p><p>This OTP is valid for 10 minutes.</p>`,
-    });
-
-    res.redirect('/reset-password');
-  } catch (err) {
-    console.error('Forgot password error:', err.message);
-    res.render('forgot-password', { error: 'Failed to send OTP. Please try again.' });
-  }
-});
-
-app.get('/reset-password', (req, res) => {
-  res.render('reset-password', { error: null });
-});
-
-app.post('/reset-password', async (req, res) => {
-  const { email, otp, password } = req.body;
-  try {
-    if (!validatePassword(password)) {
-      return res.render('reset-password', {
-        error: 'Password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one number, and one special character (!@#$%^&*).',
+      cart.items.push({
+        productId,
+        quantity: parseInt(quantity),
+        price: product.price
       });
     }
 
-    const user = await User.findOne({
-      email,
-      otp,
-      otpExpiration: { $gt: Date.now() },
-    });
-    if (!user) {
-      return res.render('reset-password', { error: 'Invalid or expired OTP. Please try again.' });
-    }
+    // Calculate total
+    cart.totalAmount = cart.items.reduce((total, item) => 
+      total + (item.price * item.quantity), 0
+    );
 
-    user.password = await bcrypt.hash(password, 10);
-    user.otp = undefined;
-    user.otpExpiration = undefined;
-    await user.save();
-
-    res.redirect('/');
+    await cart.save();
+    res.json({ success: true, message: 'Product added to cart' });
   } catch (err) {
-    console.error('Reset password error:', err.message);
-    res.render('reset-password', { error: 'Password reset failed. Please try again.' });
+    console.error('Error adding to cart:', err);
+    res.status(500).json({ error: 'Failed to add to cart' });
   }
 });
 
-// Add logout route
-app.post('/logout', async (req, res) => {
-  const token = req.cookies.token;
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, 'secretkey');
-      await User.updateOne({ email: decoded.email }, { online: false, lastSeen: Date.now() });
-      connectedUsers.delete(decoded.username);
-    } catch (err) {
-      console.error('Logout error:', err.message);
+app.put('/cart/update', authenticateToken, async (req, res) => {
+  try {
+    const { productId, quantity } = req.body;
+    const cart = await Cart.findOne({ userId: req.user.userId });
+    
+    if (!cart) {
+      return res.status(404).json({ error: 'Cart not found' });
     }
+
+    const item = cart.items.find(item => 
+      item.productId.toString() === productId
+    );
+
+    if (!item) {
+      return res.status(404).json({ error: 'Item not found in cart' });
+    }
+
+    if (quantity <= 0) {
+      cart.items = cart.items.filter(item => 
+        item.productId.toString() !== productId
+      );
+    } else {
+      item.quantity = quantity;
+    }
+
+    // Recalculate total
+    cart.totalAmount = cart.items.reduce((total, item) => 
+      total + (item.price * item.quantity), 0
+    );
+
+    await cart.save();
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error updating cart:', err);
+    res.status(500).json({ error: 'Failed to update cart' });
   }
+});
+
+app.delete('/cart/remove/:productId', authenticateToken, async (req, res) => {
+  try {
+    const cart = await Cart.findOne({ userId: req.user.userId });
+    
+    if (cart) {
+      cart.items = cart.items.filter(item => 
+        item.productId.toString() !== req.params.productId
+      );
+      
+      cart.totalAmount = cart.items.reduce((total, item) => 
+        total + (item.price * item.quantity), 0
+      );
+      
+      await cart.save();
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Error removing from cart:', err);
+    res.status(500).json({ error: 'Failed to remove from cart' });
+  }
+});
+
+// Checkout routes
+app.get('/checkout', authenticateToken, async (req, res) => {
+  try {
+    const cart = await Cart.findOne({ userId: req.user.userId })
+      .populate('items.productId');
+    
+    if (!cart || cart.items.length === 0) {
+      return res.redirect('/cart');
+    }
+
+    const user = await User.findById(req.user.userId);
+    res.render('checkout', { cart, user });
+  } catch (err) {
+    console.error('Error loading checkout:', err);
+    res.redirect('/cart');
+  }
+});
+
+app.post('/checkout/process', authenticateToken, async (req, res) => {
+  try {
+    const { shippingAddress, paymentMethod } = req.body;
+    const cart = await Cart.findOne({ userId: req.user.userId })
+      .populate('items.productId');
+    
+    if (!cart || cart.items.length === 0) {
+      return res.status(400).json({ error: 'Cart is empty' });
+    }
+
+    // Generate order ID
+    const orderId = 'ORD-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+
+    // Create order
+    const order = new Order({
+      orderId,
+      userId: req.user.userId,
+      items: cart.items.map(item => ({
+        productId: item.productId._id,
+        name: item.productId.name,
+        price: item.price,
+        quantity: item.quantity,
+        image: item.productId.images[0] || ''
+      })),
+      totalAmount: cart.totalAmount,
+      shippingAddress,
+      paymentMethod,
+      paymentStatus: 'paid' // Simulating successful payment
+    });
+
+    await order.save();
+
+    // Update product stock
+    for (const item of cart.items) {
+      await Product.findByIdAndUpdate(
+        item.productId._id,
+        { $inc: { stock: -item.quantity } }
+      );
+    }
+
+    // Clear cart
+    await Cart.findOneAndDelete({ userId: req.user.userId });
+
+    res.json({ success: true, orderId: order.orderId });
+  } catch (err) {
+    console.error('Error processing checkout:', err);
+    res.status(500).json({ error: 'Failed to process order' });
+  }
+});
+
+// Order routes
+app.get('/orders', authenticateToken, async (req, res) => {
+  try {
+    const orders = await Order.find({ userId: req.user.userId })
+      .sort({ createdAt: -1 });
+    res.render('orders', { orders, user: req.user });
+  } catch (err) {
+    console.error('Error loading orders:', err);
+    res.render('orders', { orders: [], user: req.user });
+  }
+});
+
+app.get('/order/:orderId', authenticateToken, async (req, res) => {
+  try {
+    const order = await Order.findOne({ 
+      orderId: req.params.orderId,
+      userId: req.user.userId 
+    });
+    
+    if (!order) {
+      return res.status(404).render('404');
+    }
+
+    res.render('order-detail', { order, user: req.user });
+  } catch (err) {
+    console.error('Error loading order:', err);
+    res.status(404).render('404');
+  }
+});
+
+// Admin routes
+app.get('/admin', authenticateAdmin, async (req, res) => {
+  try {
+    const totalProducts = await Product.countDocuments();
+    const totalOrders = await Order.countDocuments();
+    const totalUsers = await User.countDocuments();
+    const totalRevenue = await Order.aggregate([
+      { $match: { paymentStatus: 'paid' } },
+      { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+    ]);
+
+    const recentOrders = await Order.find()
+      .sort({ createdAt: -1 })
+      .limit(5)
+      .populate('userId', 'username email');
+
+    res.render('admin/dashboard', {
+      stats: {
+        totalProducts,
+        totalOrders,
+        totalUsers,
+        totalRevenue: totalRevenue[0]?.total || 0
+      },
+      recentOrders,
+      user: req.user
+    });
+  } catch (err) {
+    console.error('Error loading admin dashboard:', err);
+    res.render('admin/dashboard', {
+      stats: { totalProducts: 0, totalOrders: 0, totalUsers: 0, totalRevenue: 0 },
+      recentOrders: [],
+      user: req.user
+    });
+  }
+});
+
+app.get('/admin/products', authenticateAdmin, async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20;
+    const skip = (page - 1) * limit;
+
+    const totalProducts = await Product.countDocuments();
+    const products = await Product.find()
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit);
+
+    res.render('admin/products', {
+      products,
+      currentPage: page,
+      totalPages: Math.ceil(totalProducts / limit),
+      user: req.user
+    });
+  } catch (err) {
+    console.error('Error loading admin products:', err);
+    res.render('admin/products', { products: [], currentPage: 1, totalPages: 1, user: req.user });
+  }
+});
+
+app.get('/admin/product/add', authenticateAdmin, (req, res) => {
+  res.render('admin/add-product', { user: req.user, error: null });
+});
+
+app.post('/admin/product/add', authenticateAdmin, upload.array('images', 5), async (req, res) => {
+  try {
+    const { name, description, price, category, subcategory, brand, stock, featured, tags } = req.body;
+    
+    const images = req.files ? req.files.map(file => `/uploads/${file.filename}`) : [];
+    
+    const product = new Product({
+      name,
+      description,
+      price: parseFloat(price),
+      category,
+      subcategory,
+      brand,
+      images,
+      stock: parseInt(stock),
+      featured: featured === 'on',
+      tags: tags ? tags.split(',').map(tag => tag.trim()) : []
+    });
+
+    await product.save();
+    res.redirect('/admin/products');
+  } catch (err) {
+    console.error('Error adding product:', err);
+    res.render('admin/add-product', { user: req.user, error: 'Failed to add product' });
+  }
+});
+
+// Logout route
+app.post('/logout', (req, res) => {
   res.clearCookie('token');
   res.redirect('/');
 });
 
-// Socket.io middleware for authentication
-io.use((socket, next) => {
-  const token = socket.handshake.query.token;
-  if (token) {
-    try {
-      const decoded = jwt.verify(token, 'secretkey');
-      socket.userId = decoded.username;
-      socket.userEmail = decoded.email;
-      next();
-    } catch (err) {
-      next(new Error('Authentication error'));
-    }
-  } else {
-    next(new Error('Authentication error'));
-  }
+// 404 handler
+app.use((req, res) => {
+  res.status(404).render('404');
 });
 
-// Improved Socket.io for real-time chat
-io.on('connection', async (socket) => {
-  console.log(`User ${socket.userId} connected`);
-  
-  // Store the connection
-  connectedUsers.set(socket.userId, socket.id);
-  
-  // Update user online status
-  try {
-    await User.updateOne({ username: socket.userId }, { online: true, lastSeen: Date.now() });
-    io.emit('status update', { username: socket.userId, online: true });
-  } catch (err) {
-    console.error('Error updating user status:', err.message);
-  }
-
-  // Handle chat messages
-  socket.on('chat message', async (msg) => {
-    try {
-      const message = new Message({
-        user: msg.user,
-        recipient: msg.recipient || undefined, // Use undefined for group chat
-        text: msg.text,
-        messageType: 'text',
-        timestamp: new Date()
-      });
-      await message.save();
-      
-      if (msg.recipient) {
-        // Private message
-        const recipientSocketId = connectedUsers.get(msg.recipient);
-        if (recipientSocketId) {
-          io.to(recipientSocketId).emit('chat message', message);
-        }
-        // Also send to sender
-        io.to(socket.id).emit('chat message', message);
-      } else {
-        // Group message - broadcast to all
-        io.emit('chat message', message);
-      }
-    } catch (err) {
-      console.error('Error saving message to DB:', err.message);
-    }
-  });
-
-  // Handle emoji reactions
-  socket.on('emoji reaction', (data) => {
-    if (data.recipient) {
-      const recipientSocketId = connectedUsers.get(data.recipient);
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('emoji reaction', data);
-      }
-      io.to(socket.id).emit('emoji reaction', data);
-    } else {
-      io.emit('emoji reaction', data);
-    }
-  });
-
-  // Handle typing indicators
-  socket.on('typing', (data) => {
-    if (data.recipient) {
-      const recipientSocketId = connectedUsers.get(data.recipient);
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('typing', data);
-      }
-    } else {
-      socket.broadcast.emit('typing', data);
-    }
-  });
-
-  socket.on('stop typing', (data) => {
-    if (data.recipient) {
-      const recipientSocketId = connectedUsers.get(data.recipient);
-      if (recipientSocketId) {
-        io.to(recipientSocketId).emit('stop typing', data);
-      }
-    } else {
-      socket.broadcast.emit('stop typing', data);
-    }
-  });
-
-  // Handle disconnect
-  socket.on('disconnect', async () => {
-    console.log(`User ${socket.userId} disconnected`);
-    connectedUsers.delete(socket.userId);
-    
-    try {
-      await User.updateOne({ username: socket.userId }, { online: false, lastSeen: Date.now() });
-      io.emit('status update', { username: socket.userId, online: false });
-    } catch (err) {
-      console.error('Disconnect error:', err.message);
-    }
-  });
+server.listen(3000, () => {
+  console.log('E-commerce Server running on port 3000');
+  console.log('Visit http://localhost:3000 to access the website');
 });
-
-server.listen(3000, () => console.log('Server running on port 3000'));

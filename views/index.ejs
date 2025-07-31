@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ShopEasy - Your Premium E-commerce Destination</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link href="/styles/main.css" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <div class="nav-logo">
+                <a href="/"><i class="fas fa-shopping-bag"></i> ShopEasy</a>
+            </div>
+            
+            <div class="nav-search">
+                <form action="/products" method="GET" class="search-form">
+                    <input type="text" name="search" placeholder="Search products..." class="search-input">
+                    <button type="submit" class="search-btn"><i class="fas fa-search"></i></button>
+                </form>
+            </div>
+            
+            <div class="nav-links">
+                <a href="/products" class="nav-link">Products</a>
+                <% if (user) { %>
+                    <a href="/cart" class="nav-link"><i class="fas fa-shopping-cart"></i> Cart</a>
+                    <a href="/orders" class="nav-link">Orders</a>
+                    <% if (user.role === 'admin') { %>
+                        <a href="/admin" class="nav-link admin-link">Admin</a>
+                    <% } %>
+                    <div class="user-dropdown">
+                        <span class="username"><%= user.username %></span>
+                        <div class="dropdown-content">
+                            <a href="/profile">Profile</a>
+                            <form action="/logout" method="POST" style="display: inline;">
+                                <button type="submit" class="logout-btn">Logout</button>
+                            </form>
+                        </div>
+                    </div>
+                <% } else { %>
+                    <a href="/login" class="nav-link">Login</a>
+                    <a href="/register" class="nav-link">Register</a>
+                <% } %>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="hero-content">
+            <h1>Welcome to ShopEasy</h1>
+            <p>Discover amazing products at unbeatable prices. Your one-stop shop for everything you need.</p>
+            <a href="/products" class="cta-button">Shop Now</a>
+        </div>
+    </section>
+
+    <!-- Categories Section -->
+    <section class="categories-section">
+        <div class="container">
+            <h2 class="section-title">Shop by Category</h2>
+            <div class="categories-grid">
+                <% categories.forEach(category => { %>
+                    <div class="category-card">
+                        <a href="/products?category=<%= encodeURIComponent(category) %>">
+                            <div class="category-icon">
+                                <i class="fas fa-<%= getCategoryIcon(category) %>"></i>
+                            </div>
+                            <h3><%= category %></h3>
+                        </a>
+                    </div>
+                <% }) %>
+            </div>
+        </div>
+    </section>
+
+    <!-- Featured Products Section -->
+    <section class="featured-products">
+        <div class="container">
+            <h2 class="section-title">Featured Products</h2>
+            <div class="products-grid">
+                <% featuredProducts.forEach(product => { %>
+                    <div class="product-card">
+                        <div class="product-image">
+                            <a href="/product/<%= product._id %>">
+                                <% if (product.images && product.images.length > 0) { %>
+                                    <img src="<%= product.images[0] %>" alt="<%= product.name %>" loading="lazy">
+                                <% } else { %>
+                                    <div class="no-image">
+                                        <i class="fas fa-image"></i>
+                                        <p>No Image</p>
+                                    </div>
+                                <% } %>
+                            </a>
+                            <div class="product-actions">
+                                <button class="quick-add-btn" onclick="addToCart('<%= product._id %>')">
+                                    <i class="fas fa-cart-plus"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="product-info">
+                            <h3 class="product-name">
+                                <a href="/product/<%= product._id %>"><%= product.name %></a>
+                            </h3>
+                            <p class="product-category"><%= product.category %></p>
+                            <div class="product-rating">
+                                <% for (let i = 1; i <= 5; i++) { %>
+                                    <i class="fas fa-star <%= i <= product.rating ? 'active' : '' %>"></i>
+                                <% } %>
+                                <span class="rating-count">(<%= product.numReviews %>)</span>
+                            </div>
+                            <div class="product-price">
+                                $<%= product.price.toFixed(2) %>
+                            </div>
+                            <% if (product.stock === 0) { %>
+                                <div class="out-of-stock">Out of Stock</div>
+                            <% } %>
+                        </div>
+                    </div>
+                <% }) %>
+            </div>
+            
+            <% if (featuredProducts.length === 0) { %>
+                <div class="no-products">
+                    <i class="fas fa-box-open"></i>
+                    <p>No featured products available at the moment.</p>
+                    <a href="/products" class="browse-all-btn">Browse All Products</a>
+                </div>
+            <% } %>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section class="features-section">
+        <div class="container">
+            <div class="features-grid">
+                <div class="feature">
+                    <div class="feature-icon">
+                        <i class="fas fa-shipping-fast"></i>
+                    </div>
+                    <h3>Free Shipping</h3>
+                    <p>Free delivery on orders over $50</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">
+                        <i class="fas fa-shield-alt"></i>
+                    </div>
+                    <h3>Secure Payment</h3>
+                    <p>100% secure payment processing</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">
+                        <i class="fas fa-undo-alt"></i>
+                    </div>
+                    <h3>Easy Returns</h3>
+                    <p>30-day return policy</p>
+                </div>
+                <div class="feature">
+                    <div class="feature-icon">
+                        <i class="fas fa-headset"></i>
+                    </div>
+                    <h3>24/7 Support</h3>
+                    <p>Customer service always available</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <div class="footer-section">
+                    <h3>ShopEasy</h3>
+                    <p>Your trusted e-commerce partner for quality products and exceptional service.</p>
+                    <div class="social-links">
+                        <a href="#"><i class="fab fa-facebook"></i></a>
+                        <a href="#"><i class="fab fa-twitter"></i></a>
+                        <a href="#"><i class="fab fa-instagram"></i></a>
+                        <a href="#"><i class="fab fa-linkedin"></i></a>
+                    </div>
+                </div>
+                <div class="footer-section">
+                    <h4>Quick Links</h4>
+                    <ul>
+                        <li><a href="/products">Products</a></li>
+                        <li><a href="/about">About Us</a></li>
+                        <li><a href="/contact">Contact</a></li>
+                        <li><a href="/privacy">Privacy Policy</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Customer Service</h4>
+                    <ul>
+                        <li><a href="/help">Help Center</a></li>
+                        <li><a href="/shipping">Shipping Info</a></li>
+                        <li><a href="/returns">Returns</a></li>
+                        <li><a href="/track">Track Order</a></li>
+                    </ul>
+                </div>
+                <div class="footer-section">
+                    <h4>Newsletter</h4>
+                    <p>Subscribe to get updates on new products and offers</p>
+                    <form class="newsletter-form">
+                        <input type="email" placeholder="Enter your email">
+                        <button type="submit">Subscribe</button>
+                    </form>
+                </div>
+            </div>
+            <div class="footer-bottom">
+                <p>&copy; 2024 ShopEasy. All rights reserved.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- Scripts -->
+    <script>
+        // Category icons mapping
+        function getCategoryIcon(category) {
+            const icons = {
+                'Electronics': 'laptop',
+                'Clothing': 'tshirt',
+                'Home & Garden': 'home',
+                'Sports': 'running',
+                'Books': 'book',
+                'Beauty': 'palette',
+                'Toys': 'gamepad',
+                'Food': 'utensils',
+                'Health': 'heart',
+                'default': 'tag'
+            };
+            return icons[category] || icons.default;
+        }
+
+        // Add to cart function
+        async function addToCart(productId) {
+            <% if (user) { %>
+                try {
+                    const response = await fetch('/cart/add', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            productId: productId,
+                            quantity: 1
+                        })
+                    });
+
+                    const result = await response.json();
+                    if (result.success) {
+                        showNotification('Product added to cart!', 'success');
+                    } else {
+                        showNotification(result.error || 'Failed to add to cart', 'error');
+                    }
+                } catch (error) {
+                    showNotification('Failed to add to cart', 'error');
+                }
+            <% } else { %>
+                window.location.href = '/login';
+            <% } %>
+        }
+
+        // Notification function
+        function showNotification(message, type) {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            
+            document.body.appendChild(notification);
+            
+            setTimeout(() => {
+                notification.classList.add('show');
+            }, 100);
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+                setTimeout(() => {
+                    document.body.removeChild(notification);
+                }, 300);
+            }, 3000);
+        }
+    </script>
+
+    <%
+    // Category icon helper function for server-side rendering
+    function getCategoryIcon(category) {
+        const icons = {
+            'Electronics': 'laptop',
+            'Clothing': 'tshirt',
+            'Home & Garden': 'home',
+            'Sports': 'running',
+            'Books': 'book',
+            'Beauty': 'palette',
+            'Toys': 'gamepad',
+            'Food': 'utensils',
+            'Health': 'heart'
+        };
+        return icons[category] || 'tag';
+    }
+    %>
+</body>
+</html>
